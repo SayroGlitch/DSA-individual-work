@@ -5,11 +5,6 @@ __pycache__/
 venv/
 env/
 
-# Local server/test scratch files
-.codex_*/
-.codex_*.log
-*.log
-
 # Runtime analysis output
 backend/audit_log.jsonl
 backend/last_result.json
