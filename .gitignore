@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Local server/test scratch files
+.codex_*/
+.codex_*.log
+*.log
+
+# Runtime analysis output
+backend/audit_log.jsonl
+backend/last_result.json
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local build artifacts
+dist/
+build/

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SafeGuard Moderation Console</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span>
+          </div>
+          <div>
+            <p>SafeGuard</p>
+            <strong>Moderation Console</strong>
+          </div>
+        </div>
+
+        <nav class="nav-list" aria-label="Workspace">
+          <a href="#scan" class="active">Live scan</a>
+          <a href="#queue">Queue</a>
+          <a href="#lexicon">Lexicon</a>
+          <a href="#audit">Audit</a>
+        </nav>
+
+        <div class="system-card">
+          <span class="eyebrow">Backend</span>
+          <strong id="lexiconCount">Loading</strong>
+          <p id="lexiconSource">C + Python compatible scoring model</p>
+        </div>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">Real-time harassment detection</span>
+            <h1>Explainable abuse screening for chats, forums, and games</h1>
+          </div>
+          <div class="topbar-actions">
+            <button class="ghost-button" id="resetDemo" type="button">Reset</button>
+            <button class="primary-button" id="analyzeButton" type="button">Analyze</button>
+          </div>
+        </header>
+
+        <section class="workspace" id="scan" aria-labelledby="scanTitle">
+          <div class="composer-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">Message</span>
+                <h2 id="scanTitle">Live scan</h2>
+              </div>
+              <span class="status-pill" id="engineStatus">Client engine</span>
+            </div>
+
+            <textarea id="messageInput" spellcheck="false">you are such a loser</textarea>
+
+            <div class="sample-row" aria-label="Sample messages">
+              <button type="button" data-sample="hey what's up">LOW</button>
+              <button type="button" data-sample="you are such a loser">MEDIUM</button>
+              <button type="button" data-sample="kys you stupid">HIGH</button>
+              <button type="button" data-sample="you are annoying and nobody cares">Mixed</button>
+            </div>
+
+            <div class="result-layout">
+              <div class="risk-panel" id="riskPanel">
+                <div class="risk-ring" aria-hidden="true">
+                  <svg viewBox="0 0 120 120">
+                    <circle class="ring-track" cx="60" cy="60" r="50"></circle>
+                    <circle class="ring-value" id="riskRing" cx="60" cy="60" r="50"></circle>
+                  </svg>
+                  <div>
+                    <strong id="scoreValue">0</strong>
+                    <span>score</span>
+                  </div>
+                </div>
+                <div>
+                  <span class="level-badge" id="levelBadge">LOW</span>
+                  <h3 id="actionValue">ALLOW</h3>
+                  <p id="explanationText">No strong harassment indicators detected.</p>
+                </div>
+              </div>
+
+              <div class="signal-grid">
+                <div>
+                  <span>Targeted</span>
+                  <strong id="targetedValue">No</strong>
+                </div>
+                <div>
+                  <span>Matches</span>
+                  <strong id="matchesValue">0</strong>
+                </div>
+                <div>
+                  <span>Categories</span>
+                  <strong id="categoriesValue">0</strong>
+                </div>
+                <div>
+                  <span>Bonuses</span>
+                  <strong id="bonusesValue">0</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="inspector-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">Structured result</span>
+                <h2>Decision details</h2>
+              </div>
+            </div>
+
+            <div class="pipeline">
+              <div class="pipeline-step">
+                <span>1</span>
+                <div>
+                  <strong>Normalize</strong>
+                  <p id="normalizedText">you are such a loser</p>
+                </div>
+              </div>
+              <div class="pipeline-step">
+                <span>2</span>
+                <div>
+                  <strong>Trie scan</strong>
+                  <p id="scanSummary">Awaiting lexicon</p>
+                </div>
+              </div>
+              <div class="pipeline-step">
+                <span>3</span>
+                <div>
+                  <strong>Classify</strong>
+                  <p id="classifySummary">LOW / ALLOW</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="section-block">
+              <h3>Reason codes</h3>
+              <div class="chip-list" id="reasonCodes"></div>
+            </div>
+
+            <div class="section-block">
+              <h3>Matched phrases</h3>
+              <div class="match-list" id="matchList"></div>
+            </div>
+
+            <div class="section-block">
+              <h3>Category mix</h3>
+              <div class="category-bars" id="categoryBars"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="queue-band" id="queue" aria-labelledby="queueTitle">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Moderator queue</span>
+              <h2 id="queueTitle">Batch review</h2>
+            </div>
+            <button class="ghost-button" id="analyzeQueue" type="button">Scan queue</button>
+          </div>
+          <div class="queue-grid" id="queueGrid"></div>
+        </section>
+
+        <section class="two-column" id="lexicon" aria-labelledby="lexiconTitle">
+          <div class="lexicon-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">Developer mode</span>
+                <h2 id="lexiconTitle">Lexicon lab</h2>
+              </div>
+              <button class="ghost-button" id="exportCustom" type="button">Export JSON</button>
+            </div>
+
+            <form class="annotation-form" id="annotationForm">
+              <label>
+                Phrase
+                <input id="newPhrase" name="phrase" autocomplete="off" />
+              </label>
+              <label>
+                Score
+                <input id="newScore" name="score" type="number" min="1" max="10" value="4" />
+              </label>
+              <label>
+                Category
+                <select id="newCategory" name="category"></select>
+              </label>
+              <button class="primary-button" type="submit">Save entry</button>
+            </form>
+          </div>
+
+          <div class="lexicon-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">Words</span>
+                <h2>Search</h2>
+              </div>
+            </div>
+            <input class="search-input" id="lexiconSearch" placeholder="Search phrase or category" />
+            <div class="lexicon-list" id="lexiconList"></div>
+          </div>
+        </section>
+
+        <section class="audit-band" id="audit" aria-labelledby="auditTitle">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Local session</span>
+              <h2 id="auditTitle">Audit timeline</h2>
+            </div>
+            <button class="ghost-button" id="clearAudit" type="button">Clear</button>
+          </div>
+          <div class="audit-list" id="auditList"></div>
+        </section>
+
+        <section class="json-band" aria-labelledby="jsonTitle">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">API contract</span>
+              <h2 id="jsonTitle">JSON output</h2>
+            </div>
+            <button class="ghost-button" id="copyJson" type="button">Copy</button>
+          </div>
+          <pre id="jsonOutput"></pre>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

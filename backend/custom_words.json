@@ -1,0 +1,101 @@
+{
+  "stop breathing": {
+    "score": 10,
+    "category": "self-harm encouragement",
+    "severity": "high",
+    "target_type": "individual",
+    "directness": "direct",
+    "intent": "manipulate",
+    "platform_context": "chat",
+    "needs_context": false,
+    "repeat_sensitive": true
+  },
+  "death": {
+    "score": 10,
+    "category": "threat",
+    "severity": "critical",
+    "target_type": "unknown",
+    "directness": "direct",
+    "intent": "attack",
+    "platform_context": "general",
+    "needs_context": true,
+    "repeat_sensitive": true
+  },
+  "stop your airways": {
+    "score": 7,
+    "category": "self-harm encouragement",
+    "severity": "medium",
+    "target_type": "individual",
+    "directness": "direct",
+    "intent": "manipulate",
+    "platform_context": "general",
+    "needs_context": false,
+    "repeat_sensitive": false
+  },
+  "nigger": {
+    "score": 10,
+    "category": "identity-targeted",
+    "severity": "critical",
+    "target_type": "individual",
+    "directness": "direct",
+    "intent": "degrade",
+    "platform_context": "general",
+    "needs_context": false,
+    "repeat_sensitive": true
+  },
+  "cock": {
+    "score": 5,
+    "category": "insult",
+    "severity": "medium",
+    "target_type": "individual",
+    "directness": "direct",
+    "intent": "attack",
+    "platform_context": "general",
+    "needs_context": false,
+    "repeat_sensitive": true
+  },
+  "bum": {
+    "score": 3,
+    "category": "insult",
+    "severity": "low",
+    "target_type": "individual",
+    "directness": "direct",
+    "intent": "attack",
+    "platform_context": "general",
+    "needs_context": true,
+    "repeat_sensitive": true
+  },
+  "shit": {
+    "score": 3,
+    "category": "insult",
+    "severity": "low",
+    "target_type": "unknown",
+    "directness": "direct",
+    "intent": "attack",
+    "platform_context": "general",
+    "needs_context": true,
+    "repeat_sensitive": true
+  },
+  "goblin": {
+    "score": 3,
+    "category": "insult",
+    "severity": "low",
+    "target_type": "unknown",
+    "directness": "direct",
+    "intent": "attack",
+    "platform_context": "general",
+    "needs_context": true,
+    "repeat_sensitive": true
+  },
+  "peasant": {
+    "score": 2,
+    "category": "insult",
+    "severity": "low",
+    "target_type": "individual",
+    "directness": "direct",
+    "intent": "attack",
+    "platform_context": "general",
+    "needs_context": false,
+    "repeat_sensitive": true
+  }
+}
