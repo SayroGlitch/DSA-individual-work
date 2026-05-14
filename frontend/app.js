@@ -1,683 +1,459 @@
-const VALID_CATEGORIES = [
-  "insult",
-  "mockery",
-  "humiliation",
-  "exclusion",
-  "harassment",
-  "threat",
-  "self-harm encouragement",
-  "identity-targeted",
-  "sexual-harassment",
-  "appearance-shaming",
-  "body-shaming",
-  "gaslighting",
-  "profanity-targeted",
-  "profanity-general",
-  "doxxing",
-  "impersonation",
-  "cyberstalking",
-  "defamation",
-  "intimidation"
-];
+const API_BASE = "http://localhost:5069";
+const PLATFORM = "p2p_chat";
+const STUDENTS = ["StudentA", "StudentB"];
 
-const TARGET_WORDS = new Set(["you", "your", "u", "ur", "youre", "you're", "@user"]);
-const HIGH_RISK_CATEGORIES = new Set(["threat", "self-harm encouragement", "sexual-harassment"]);
+let currentUser = STUDENTS[0];
+let messages = [];
+let alerts = [];
+let latestAnalyses = {};
 
-const FALLBACK_WORDS = {
-  annoying: { score: 2, category: "insult" },
-  loser: { score: 5, category: "humiliation" },
-  "you are such a loser": { score: 8, category: "humiliation" },
-  "nobody cares": { score: 5, category: "mockery" },
-  "go away": { score: 5, category: "exclusion" },
-  "kys": { score: 10, category: "self-harm encouragement" },
-  stupid: { score: 5, category: "insult" }
+const elements = {
+    connectionStatus: document.getElementById("connectionStatus"),
+    refreshMessagesBtn: document.getElementById("refreshMessagesBtn"),
+    currentPerspective: document.getElementById("currentPerspective"),
+    switchUserBtn: document.getElementById("switchUserBtn"),
+    noticeArea: document.getElementById("noticeArea"),
+    chatMessages: document.getElementById("chatMessages"),
+    messageForm: document.getElementById("messageForm"),
+    messageInput: document.getElementById("messageInput"),
+    latestResult: document.getElementById("latestResult"),
+    loadStudentABtn: document.getElementById("loadStudentABtn"),
+    loadStudentBBtn: document.getElementById("loadStudentBBtn"),
+    sessionResult: document.getElementById("sessionResult"),
+    stakeholderFilter: document.getElementById("stakeholderFilter"),
+    minScoreInput: document.getElementById("minScoreInput"),
+    searchAlertsBtn: document.getElementById("searchAlertsBtn"),
+    refreshAlertsBtn: document.getElementById("refreshAlertsBtn"),
+    alertsList: document.getElementById("alertsList")
 };
 
-const queueMessages = [
-  "hey what's up",
-  "you are such a loser",
-  "nobody cares about this",
-  "please stop spamming the chat",
-  "kys you stupid",
-  "that was a weird comment"
-];
-
-const state = {
-  lexicon: {},
-  baseCount: 0,
-  backendCustomCount: 0,
-  customCount: 0,
-  localCustom: loadStoredJson("safeguardLocalCustom", {}),
-  audit: loadStoredJson("safeguardAudit", []),
-  lastResult: null
-};
-
-const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => Array.from(document.querySelectorAll(selector));
-
-document.addEventListener("DOMContentLoaded", async () => {
-  fillCategoryOptions();
-  bindEvents();
-  await loadLexicon();
-  renderLexiconList();
-  renderQueue();
-  renderAudit();
-  previewCurrentMessage();
+document.addEventListener("DOMContentLoaded", () => {
+    updatePerspectiveDisplay();
+    bindEvents();
+    loadMessages();
+    loadAlerts();
+    setupSocket();
 });
 
 function bindEvents() {
-  $("#analyzeButton").addEventListener("click", analyzeCurrentMessage);
-  $("#resetDemo").addEventListener("click", resetDemo);
-  $("#messageInput").addEventListener("input", previewCurrentMessage);
-  $("#analyzeQueue").addEventListener("click", scanQueue);
-  $("#annotationForm").addEventListener("submit", saveCustomEntry);
-  $("#lexiconSearch").addEventListener("input", renderLexiconList);
-  $("#clearAudit").addEventListener("click", clearAudit);
-  $("#copyJson").addEventListener("click", copyJson);
-  $("#exportCustom").addEventListener("click", exportCustomJson);
-
-  $$(".sample-row button").forEach((button) => {
-    button.addEventListener("click", () => {
-      $("#messageInput").value = button.dataset.sample;
-      previewCurrentMessage();
-    });
-  });
-
-  $$(".nav-list a").forEach((link) => {
-    link.addEventListener("click", () => {
-      $$(".nav-list a").forEach((item) => item.classList.remove("active"));
-      link.classList.add("active");
-    });
-  });
+    elements.switchUserBtn.addEventListener("click", switchPerspective);
+    elements.refreshMessagesBtn.addEventListener("click", loadMessages);
+    elements.messageForm.addEventListener("submit", sendMessage);
+    elements.loadStudentABtn.addEventListener("click", () => loadSession(STUDENTS[0]));
+    elements.loadStudentBBtn.addEventListener("click", () => loadSession(STUDENTS[1]));
+    elements.refreshAlertsBtn.addEventListener("click", loadAlerts);
+    elements.searchAlertsBtn.addEventListener("click", searchAlerts);
+    elements.stakeholderFilter.addEventListener("change", loadAlerts);
 }
 
-async function loadLexicon() {
-  const baseWords = await fetchJson(["../backend/words.json", "/backend/words.json"]);
-  const customWords = await fetchJson(["../backend/custom_words.json", "/backend/custom_words.json"]);
+async function apiRequest(path, options = {}) {
+    const response = await fetch(`${API_BASE}${path}`, {
+        headers: {
+            "Content-Type": "application/json"
+        },
+        ...options
+    });
 
-  const base = baseWords || FALLBACK_WORDS;
-  const custom = customWords || {};
+    const data = await response.json().catch(() => ({}));
 
-  state.baseCount = Object.keys(base).length;
-  state.backendCustomCount = Object.keys(custom).length;
-  state.customCount = state.backendCustomCount + Object.keys(state.localCustom).length;
-  state.lexicon = {
-    ...base,
-    ...custom,
-    ...state.localCustom
-  };
+    if (!response.ok) {
+        throw new Error(data.error || "Backend request failed");
+    }
 
-  const total = Object.keys(state.lexicon).length;
-  $("#lexiconCount").textContent = `${total} phrases`;
-  $("#lexiconSource").textContent = baseWords
-    ? `${state.baseCount} base, ${state.customCount} custom`
-    : "Fallback lexicon active";
-  $("#engineStatus").textContent = baseWords ? "Loaded backend lexicon" : "Fallback lexicon";
+    return data;
 }
 
-async function fetchJson(paths) {
-  for (const path of paths) {
+async function loadMessages() {
     try {
-      const response = await fetch(path, { cache: "no-store" });
-      if (response.ok) {
-        return await response.json();
-      }
+        const data = await apiRequest("/messages");
+        messages = data
+            .filter((message) => message.platform === PLATFORM)
+            .sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+
+        renderMessages();
+        setConnection(true);
+        clearNotice();
     } catch (error) {
-      continue;
+        setConnection(false);
+        showNotice("Could not load messages. Make sure the backend is running on http://localhost:5069.", true);
     }
-  }
-  return null;
 }
 
-function previewCurrentMessage() {
-  const message = $("#messageInput").value.trim();
-  const result = analyzeMessage(message);
-  state.lastResult = result;
-  renderResult(result);
-  return result;
-}
+async function sendMessage(event) {
+    event.preventDefault();
 
-function analyzeCurrentMessage() {
-  const result = previewCurrentMessage();
-  rememberAudit(result);
-}
-
-function analyzeMessage(message) {
-  const normalized = normalizeText(message);
-  const tokens = normalized ? normalized.split(" ") : [];
-  const matches = findMatches(normalized);
-  const matchedEntries = matches.map((match) => ({
-    phrase: match.phrase,
-    score: match.score,
-    category: match.category,
-    mode: "client_exact",
-    occurrences: match.occurrences
-  }));
-
-  const categories = countBy(matchedEntries, "category");
-  const exactScore = matchedEntries.reduce((sum, entry) => sum + entry.score, 0);
-  const targeted = tokens.some((token) => TARGET_WORDS.has(token));
-  const repetitionBonus = 0;
-  const targetingBonus = targeted && exactScore > 0 ? 2 : 0;
-  const toxicityBonus = calculateToxicityBonus(matchedEntries, tokens);
-  const score = exactScore + repetitionBonus + targetingBonus + toxicityBonus;
-  const level = classifyScore(score);
-  const action = getAction(level);
-  const reasonCodes = getReasonCodes(matchedEntries, targeted, repetitionBonus, toxicityBonus);
-
-  return {
-    success: true,
-    data: {
-      original_message: message,
-      normalized_message: normalized,
-      score,
-      level,
-      action,
-      reason_codes: reasonCodes,
-      targeted,
-      repetition_bonus: repetitionBonus,
-      targeting_bonus: targetingBonus,
-      toxicity_accumulation: toxicityBonus,
-      matched_words: matchedEntries.map((entry) => entry.phrase),
-      matched_details: matchedEntries,
-      categories,
-      explanation: buildExplanation(categories, targeted, repetitionBonus, toxicityBonus)
-    },
-    errors: []
-  };
-}
-
-function normalizeText(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s']/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function findMatches(normalized) {
-  if (!normalized) {
-    return [];
-  }
-
-  return Object.entries(state.lexicon)
-    .map(([phrase, info]) => {
-      const normalizedPhrase = normalizeText(phrase);
-      const occurrences = countPhraseOccurrences(normalized, normalizedPhrase);
-      return {
-        phrase: normalizedPhrase,
-        score: Number(info.score || 0),
-        category: info.category || "harassment",
-        occurrences
-      };
-    })
-    .filter((entry) => entry.occurrences > 0)
-    .sort((a, b) => b.score - a.score || a.phrase.localeCompare(b.phrase));
-}
-
-function countPhraseOccurrences(text, phrase) {
-  if (!phrase) {
-    return 0;
-  }
-
-  let count = 0;
-  let index = text.indexOf(phrase);
-
-  while (index !== -1) {
-    const before = index === 0 ? " " : text[index - 1];
-    const afterIndex = index + phrase.length;
-    const after = afterIndex >= text.length ? " " : text[afterIndex];
-    const hasBoundary = before === " " && after === " ";
-
-    if (hasBoundary) {
-      count += 1;
+    const text = elements.messageInput.value.trim();
+    if (!text) {
+        showNotice("Please type a message before sending.", true);
+        return;
     }
 
-    index = text.indexOf(phrase, index + 1);
-  }
+    setSendLoading(true);
 
-  return count;
+    try {
+        const result = await apiRequest("/messages", {
+            method: "POST",
+            body: JSON.stringify({
+                sender: currentUser,
+                platform: PLATFORM,
+                text
+            })
+        });
+
+        const message = result.message || {
+            id: Date.now(),
+            sender: currentUser,
+            platform: PLATFORM,
+            text,
+            timestamp: new Date().toISOString()
+        };
+
+        latestAnalyses[message.id] = {
+            analysis: result.analysis || {},
+            session: result.session_pattern || {}
+        };
+
+        messages.push(message);
+        messages.sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+
+        elements.messageInput.value = "";
+        renderMessages();
+        renderLatestResult(result);
+        addIncomingAlerts(result.alerts || []);
+        setConnection(true);
+        clearNotice();
+    } catch (error) {
+        setConnection(false);
+        showNotice(error.message || "Message could not be sent. Check if the backend is running.", true);
+    } finally {
+        setSendLoading(false);
+    }
 }
 
-function calculateToxicityBonus(matches, tokens) {
-  let bonus = 0;
+function renderMessages() {
+    elements.chatMessages.innerHTML = "";
 
-  if (matches.length >= 3) {
-    bonus += 2;
-  }
+    if (messages.length === 0) {
+        elements.chatMessages.innerHTML = '<div class="empty-state">No p2p_chat messages yet.</div>';
+        return;
+    }
 
-  if (matches.some((entry) => HIGH_RISK_CATEGORIES.has(entry.category))) {
-    bonus += 3;
-  }
+    messages.forEach((message) => {
+        const row = document.createElement("div");
+        const isMine = message.sender === currentUser;
+        row.className = `message-row ${isMine ? "mine" : "theirs"}`;
 
-  if (tokens.length <= 5 && matches.length > 0) {
-    bonus += 1;
-  }
+        const bubble = document.createElement("div");
+        bubble.className = "message-bubble";
 
-  return bonus;
-}
+        const meta = document.createElement("div");
+        meta.className = "message-meta";
+        meta.textContent = `${safeText(message.sender)} - ${formatTime(message.timestamp)}`;
 
-function classifyScore(score) {
-  if (score >= 18) {
-    return "HIGH";
-  }
-  if (score >= 7) {
-    return "MEDIUM";
-  }
-  return "LOW";
-}
+        const text = document.createElement("div");
+        text.className = "message-text";
+        text.textContent = message.text || "N/A";
 
-function getAction(level) {
-  if (level === "HIGH") {
-    return "BLOCK";
-  }
-  if (level === "MEDIUM") {
-    return "REVIEW";
-  }
-  return "ALLOW";
-}
+        bubble.appendChild(meta);
+        bubble.appendChild(text);
 
-function getReasonCodes(matches, targeted, repetitionBonus, toxicityBonus) {
-  const reasons = [];
-  const categories = new Set(matches.map((entry) => entry.category));
+        const savedAnalysis = latestAnalyses[message.id];
+        if (savedAnalysis) {
+            bubble.appendChild(createAnalysisLine(savedAnalysis.analysis));
+        }
 
-  if (targeted) {
-    reasons.push("targeted_abuse");
-  }
-  if (repetitionBonus > 0) {
-    reasons.push("repetition");
-  }
-  if (toxicityBonus > 0) {
-    reasons.push("toxicity_accumulation");
-  }
-  if (categories.has("self-harm encouragement")) {
-    reasons.push("self_harm");
-  }
-  if (categories.has("threat")) {
-    reasons.push("threat");
-  }
-  if (categories.has("sexual-harassment")) {
-    reasons.push("sexual_harassment");
-  }
-  if (categories.has("identity-targeted")) {
-    reasons.push("identity_attack");
-  }
-  if (reasons.length === 0 && matches.length > 0) {
-    reasons.push("keyword_match");
-  }
-
-  return reasons;
-}
-
-function buildExplanation(categories, targeted, repetitionBonus, toxicityBonus) {
-  const names = Object.entries(categories)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 2)
-    .map(([name]) => name);
-
-  if (names.length === 0) {
-    return "No strong harassment indicators detected.";
-  }
-
-  let explanation = `Detected ${names.join(" and ")} language.`;
-
-  if (targeted) {
-    explanation += " Message appears directly targeted.";
-  }
-  if (repetitionBonus > 0) {
-    explanation += " Repeated harmful patterns increased the risk.";
-  }
-  if (toxicityBonus > 0) {
-    explanation += " Combined toxicity signals increased the final score.";
-  }
-
-  return explanation;
-}
-
-function renderResult(result) {
-  const data = result.data;
-  const ring = $("#riskRing");
-  const scorePercent = Math.min(data.score, 30) / 30;
-  const levelClass = data.level.toLowerCase();
-  const actionClass = data.action.toLowerCase();
-
-  $("#scoreValue").textContent = data.score;
-  $("#levelBadge").textContent = data.level;
-  $("#levelBadge").className = `level-badge ${levelClass}`;
-  $("#actionValue").textContent = data.action;
-  $("#explanationText").textContent = data.explanation;
-  $("#targetedValue").textContent = data.targeted ? "Yes" : "No";
-  $("#matchesValue").textContent = data.matched_details.length;
-  $("#categoriesValue").textContent = Object.keys(data.categories).length;
-  $("#bonusesValue").textContent =
-    data.repetition_bonus + data.targeting_bonus + data.toxicity_accumulation;
-  $("#normalizedText").textContent = data.normalized_message || "empty";
-  $("#scanSummary").textContent = `${data.matched_details.length} phrase matches, ${data.score} total score`;
-  $("#classifySummary").textContent = `${data.level} / ${data.action}`;
-  ring.style.strokeDashoffset = String(314 - 314 * scorePercent);
-  ring.style.stroke = data.level === "HIGH" ? "var(--red)" : data.level === "MEDIUM" ? "var(--amber)" : "var(--teal)";
-
-  renderReasonCodes(data.reason_codes);
-  renderMatchList(data.matched_details);
-  renderCategoryBars(data.categories);
-  $("#jsonOutput").textContent = JSON.stringify(result, null, 2);
-
-  const panel = $("#riskPanel");
-  panel.dataset.level = data.level;
-  panel.querySelector("#actionValue").className = actionClass;
-}
-
-function renderReasonCodes(reasons) {
-  const container = $("#reasonCodes");
-  container.innerHTML = "";
-
-  if (reasons.length === 0) {
-    container.appendChild(emptyState("none"));
-    return;
-  }
-
-  reasons.forEach((reason) => {
-    const chip = document.createElement("span");
-    chip.className = "chip";
-    chip.textContent = reason;
-    container.appendChild(chip);
-  });
-}
-
-function renderMatchList(matches) {
-  const container = $("#matchList");
-  container.innerHTML = "";
-
-  if (matches.length === 0) {
-    container.appendChild(emptyState("No matched phrases"));
-    return;
-  }
-
-  matches.forEach((match) => {
-    const row = document.createElement("div");
-    row.className = "match-item";
-    row.innerHTML = `
-      <div>
-        <strong></strong>
-        <p></p>
-      </div>
-      <span class="score-token"></span>
-    `;
-    row.querySelector("strong").textContent = match.phrase;
-    row.querySelector("p").textContent = `${match.category} / ${match.mode} / ${match.occurrences} occurrence`;
-    row.querySelector(".score-token").textContent = match.score;
-    container.appendChild(row);
-  });
-}
-
-function renderCategoryBars(categories) {
-  const container = $("#categoryBars");
-  const entries = Object.entries(categories).sort((a, b) => b[1] - a[1]);
-  const max = entries.reduce((highest, [, value]) => Math.max(highest, value), 1);
-  container.innerHTML = "";
-
-  if (entries.length === 0) {
-    container.appendChild(emptyState("No categories detected"));
-    return;
-  }
-
-  entries.forEach(([category, count]) => {
-    const row = document.createElement("div");
-    row.className = "bar-row";
-    row.innerHTML = `
-      <span></span>
-      <div class="bar-track"><div class="bar-fill"></div></div>
-      <strong></strong>
-    `;
-    row.querySelector("span").textContent = category;
-    row.querySelector(".bar-fill").style.width = `${(count / max) * 100}%`;
-    row.querySelector("strong").textContent = count;
-    container.appendChild(row);
-  });
-}
-
-function renderQueue(results = []) {
-  const container = $("#queueGrid");
-  container.innerHTML = "";
-
-  queueMessages.forEach((message, index) => {
-    const result = results[index] || analyzeMessage(message);
-    const data = result.data;
-    const item = document.createElement("article");
-    item.className = "queue-item";
-    item.innerHTML = `
-      <strong></strong>
-      <p></p>
-      <footer>
-        <span class="action-pill"></span>
-        <button class="ghost-button" type="button">Open</button>
-      </footer>
-    `;
-    item.querySelector("strong").textContent = message;
-    item.querySelector("p").textContent = data.explanation;
-    const pill = item.querySelector(".action-pill");
-    pill.textContent = `${data.level} / ${data.action}`;
-    pill.classList.add(data.action.toLowerCase());
-    item.querySelector("button").addEventListener("click", () => {
-      $("#messageInput").value = message;
-      previewCurrentMessage();
-      document.querySelector("#scan").scrollIntoView({ behavior: "smooth" });
+        row.appendChild(bubble);
+        elements.chatMessages.appendChild(row);
     });
-    container.appendChild(item);
-  });
+
+    elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
 }
 
-function scanQueue() {
-  const results = queueMessages.map((message) => analyzeMessage(message));
-  renderQueue(results);
-  results.forEach(rememberAudit);
+function createAnalysisLine(analysis) {
+    const line = document.createElement("div");
+    line.className = "analysis-line";
+
+    const level = analysis.level || "N/A";
+    line.appendChild(createBadge(level));
+
+    const details = document.createElement("span");
+    details.textContent = `Score: ${valueOrNA(analysis.score)} | Action: ${valueOrNA(analysis.action)}`;
+    line.appendChild(details);
+
+    const matchedWords = formatList(analysis.matched_words);
+    if (matchedWords !== "N/A") {
+        const words = document.createElement("span");
+        words.textContent = `| Matched: ${matchedWords}`;
+        line.appendChild(words);
+    }
+
+    return line;
 }
 
-function renderLexiconList() {
-  const query = $("#lexiconSearch").value.trim().toLowerCase();
-  const container = $("#lexiconList");
-  const entries = Object.entries(state.lexicon)
-    .filter(([phrase, info]) => {
-      const category = String(info.category || "");
-      return !query || phrase.toLowerCase().includes(query) || category.toLowerCase().includes(query);
-    })
-    .sort((a, b) => Number(b[1].score || 0) - Number(a[1].score || 0))
-    .slice(0, 70);
-
-  container.innerHTML = "";
-
-  if (entries.length === 0) {
-    container.appendChild(emptyState("No lexicon entries"));
-    return;
-  }
-
-  entries.forEach(([phrase, info]) => {
-    const item = document.createElement("div");
-    item.className = "lexicon-item";
-    item.innerHTML = `
-      <div>
-        <strong></strong>
-        <p></p>
-      </div>
-      <span class="score-token"></span>
-    `;
-    item.querySelector("strong").textContent = phrase;
-    item.querySelector("p").textContent = info.category || "harassment";
-    item.querySelector(".score-token").textContent = info.score || 0;
-    container.appendChild(item);
-  });
+function switchPerspective() {
+    currentUser = currentUser === STUDENTS[0] ? STUDENTS[1] : STUDENTS[0];
+    updatePerspectiveDisplay();
+    renderMessages();
 }
 
-function saveCustomEntry(event) {
-  event.preventDefault();
-
-  const phrase = normalizeText($("#newPhrase").value);
-  const score = Number($("#newScore").value);
-  const category = $("#newCategory").value;
-
-  if (!phrase || !score) {
-    return;
-  }
-
-  state.localCustom[phrase] = {
-    score,
-    category,
-    severity: score >= 8 ? "high" : score >= 4 ? "medium" : "low",
-    target_type: "unknown",
-    directness: "direct",
-    intent: "attack",
-    platform_context: "general",
-    needs_context: score < 8,
-    repeat_sensitive: true
-  };
-
-  localStorage.setItem("safeguardLocalCustom", JSON.stringify(state.localCustom));
-  state.lexicon[phrase] = state.localCustom[phrase];
-  state.customCount = state.backendCustomCount + Object.keys(state.localCustom).length;
-  $("#newPhrase").value = "";
-  $("#newScore").value = "4";
-  $("#lexiconCount").textContent = `${Object.keys(state.lexicon).length} phrases`;
-  $("#lexiconSource").textContent = `${state.baseCount} base, ${state.customCount} custom`;
-  renderLexiconList();
-  previewCurrentMessage();
+function updatePerspectiveDisplay() {
+    const otherUser = currentUser === STUDENTS[0] ? STUDENTS[1] : STUDENTS[0];
+    elements.currentPerspective.textContent = `Current perspective: ${currentUser}`;
+    elements.switchUserBtn.textContent = `Switch to ${otherUser}`;
+    elements.messageInput.placeholder = `Message as ${currentUser}...`;
 }
 
-function fillCategoryOptions() {
-  const select = $("#newCategory");
-  VALID_CATEGORIES.forEach((category) => {
-    const option = document.createElement("option");
-    option.value = category;
-    option.textContent = category;
-    select.appendChild(option);
-  });
+function renderLatestResult(result) {
+    const analysis = result.analysis || {};
+    const session = result.session_pattern || {};
+
+    elements.latestResult.innerHTML = "";
+    elements.latestResult.appendChild(createDataGrid([
+        ["Score", valueOrNA(analysis.score)],
+        ["Level", createBadge(analysis.level || "N/A")],
+        ["Action", valueOrNA(analysis.action)],
+        ["Categories", formatList(analysis.categories)],
+        ["Matched words", formatList(analysis.matched_words)],
+        ["Pattern level", valueOrNA(session.pattern_level)],
+        ["Total messages", valueOrNA(session.total_messages)],
+        ["High count", valueOrNA(session.high_count)],
+        ["Escalating", formatBoolean(session.escalating)]
+    ]));
 }
 
-function rememberAudit(result) {
-  const item = {
-    timestamp: new Date().toISOString(),
-    result
-  };
+async function loadAlerts() {
+    const stakeholder = elements.stakeholderFilter.value;
+    const path = stakeholder ? `/alerts?stakeholder=${encodeURIComponent(stakeholder)}` : "/alerts";
 
-  state.audit = [item, ...state.audit].slice(0, 12);
-  localStorage.setItem("safeguardAudit", JSON.stringify(state.audit));
-  renderAudit();
+    try {
+        const data = await apiRequest(path);
+        alerts = data.filter((alert) => !alert.platform || alert.platform === PLATFORM);
+        renderAlerts();
+        setConnection(true);
+    } catch (error) {
+        setConnection(false);
+        showNotice("Could not load alerts from the backend.", true);
+    }
 }
 
-function renderAudit() {
-  const container = $("#auditList");
-  container.innerHTML = "";
+async function searchAlerts() {
+    const minScore = elements.minScoreInput.value.trim();
+    if (minScore === "") {
+        showNotice("Enter a minimum score before searching alerts.", true);
+        return;
+    }
 
-  if (state.audit.length === 0) {
-    container.appendChild(emptyState("No local audit entries"));
-    return;
-  }
+    try {
+        const data = await apiRequest(`/alerts/search?min_score=${encodeURIComponent(minScore)}`);
+        const stakeholder = elements.stakeholderFilter.value;
+        alerts = data.filter((alert) => {
+            const matchesPlatform = !alert.platform || alert.platform === PLATFORM;
+            const matchesStakeholder = !stakeholder || alert.stakeholder === stakeholder;
+            return matchesPlatform && matchesStakeholder;
+        });
+        renderAlerts();
+        setConnection(true);
+        clearNotice();
+    } catch (error) {
+        setConnection(false);
+        showNotice("Alert search failed. Check the backend and score value.", true);
+    }
+}
 
-  state.audit.forEach((entry) => {
-    const data = entry.result.data;
-    const item = document.createElement("div");
-    item.className = "audit-item";
-    item.innerHTML = `
-      <time></time>
-      <div>
-        <strong></strong>
-        <p></p>
-      </div>
-      <span class="action-pill"></span>
-    `;
-    item.querySelector("time").textContent = new Date(entry.timestamp).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
+function addIncomingAlerts(newAlerts) {
+    newAlerts.forEach((alert) => {
+        if (!alertExists(alert)) {
+            alerts.unshift(alert);
+        }
     });
-    item.querySelector("strong").textContent = data.original_message || "empty";
-    item.querySelector("p").textContent = data.explanation;
-    const pill = item.querySelector(".action-pill");
-    pill.textContent = data.action;
-    pill.classList.add(data.action.toLowerCase());
-    container.appendChild(item);
-  });
+    renderAlerts();
 }
 
-function clearAudit() {
-  state.audit = [];
-  localStorage.removeItem("safeguardAudit");
-  renderAudit();
+function renderAlerts() {
+    elements.alertsList.innerHTML = "";
+
+    if (alerts.length === 0) {
+        elements.alertsList.innerHTML = '<div class="empty-state">No alerts found for this view.</div>';
+        return;
+    }
+
+    alerts.forEach((alert) => {
+        const card = document.createElement("div");
+        card.className = "alert-card";
+
+        const top = document.createElement("div");
+        top.className = "alert-top";
+
+        const title = document.createElement("div");
+        title.className = "alert-title";
+        title.textContent = `${valueOrNA(alert.stakeholder)} alert for ${valueOrNA(alert.sender)}`;
+
+        top.appendChild(title);
+        top.appendChild(createBadge(alert.effective_level || alert.level || "N/A"));
+
+        const grid = createDataGrid([
+            ["Action", valueOrNA(alert.action)],
+            ["Score", valueOrNA(alert.score)],
+            ["Matched words", formatList(alert.matched_words)],
+            ["Message", valueOrNA(alert.original_message)]
+        ]);
+
+        card.appendChild(top);
+        card.appendChild(grid);
+        elements.alertsList.appendChild(card);
+    });
 }
 
-async function copyJson() {
-  if (!state.lastResult) {
-    return;
-  }
-
-  const value = JSON.stringify(state.lastResult, null, 2);
-
-  try {
-    await navigator.clipboard.writeText(value);
-  } catch (error) {
-    const range = document.createRange();
-    range.selectNodeContents($("#jsonOutput"));
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
-
-  $("#copyJson").textContent = "Copied";
-  setTimeout(() => {
-    $("#copyJson").textContent = "Copy";
-  }, 1200);
+async function loadSession(student) {
+    try {
+        const data = await apiRequest(`/session?sender=${encodeURIComponent(student)}&platform=${encodeURIComponent(PLATFORM)}`);
+        elements.sessionResult.innerHTML = "";
+        elements.sessionResult.appendChild(createDataGrid([
+            ["Student", student],
+            ["Pattern level", valueOrNA(data.pattern_level)],
+            ["Total messages", valueOrNA(data.total_messages)],
+            ["High count", valueOrNA(data.high_count)],
+            ["Escalating", formatBoolean(data.escalating)]
+        ]));
+        setConnection(true);
+        clearNotice();
+    } catch (error) {
+        setConnection(false);
+        showNotice(`Could not load session for ${student}.`, true);
+    }
 }
 
-function exportCustomJson() {
-  const blob = new Blob([JSON.stringify(state.localCustom, null, 2)], {
-    type: "application/json"
-  });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = "custom_words.json";
-  anchor.click();
-  URL.revokeObjectURL(url);
+function setupSocket() {
+    if (typeof io === "undefined") {
+        showNotice("Socket.IO could not load, so real-time alerts are disabled.", false);
+        return;
+    }
+
+    const socket = io(API_BASE, {
+        transports: ["websocket", "polling"]
+    });
+
+    socket.on("connect", () => {
+        setConnection(true);
+    });
+
+    socket.on("connect_error", () => {
+        setConnection(false);
+    });
+
+    socket.on("new_alert", (alert) => {
+        if (!alert.platform || alert.platform === PLATFORM) {
+            if (!alertExists(alert)) {
+                alerts.unshift(alert);
+            }
+            renderAlerts();
+        }
+    });
 }
 
-async function resetDemo() {
-  state.localCustom = {};
-  state.audit = [];
-  localStorage.removeItem("safeguardLocalCustom");
-  localStorage.removeItem("safeguardAudit");
+function createDataGrid(items) {
+    const grid = document.createElement("div");
+    grid.className = "data-grid";
 
-  $("#messageInput").value = "you are such a loser";
-  $("#newPhrase").value = "";
-  $("#newScore").value = "4";
-  $("#newCategory").value = "mockery";
-  $("#lexiconSearch").value = "";
+    items.forEach(([label, value]) => {
+        const labelElement = document.createElement("strong");
+        labelElement.textContent = label;
 
-  await loadLexicon();
-  renderLexiconList();
-  renderQueue();
-  renderAudit();
-  previewCurrentMessage();
-  document.querySelector("#scan").scrollIntoView({ behavior: "smooth" });
+        const valueElement = document.createElement("span");
+        if (value instanceof Node) {
+            valueElement.appendChild(value);
+        } else {
+            valueElement.textContent = value;
+        }
+
+        grid.appendChild(labelElement);
+        grid.appendChild(valueElement);
+    });
+
+    return grid;
 }
 
-function countBy(items, key) {
-  return items.reduce((acc, item) => {
-    acc[item[key]] = (acc[item[key]] || 0) + 1;
-    return acc;
-  }, {});
+function createBadge(level) {
+    const badge = document.createElement("span");
+    const normalized = String(level || "unknown").toLowerCase().replace(/[^a-z]/g, "");
+    badge.className = `badge level-${normalized}`;
+    badge.textContent = String(level || "N/A").toUpperCase();
+    return badge;
 }
 
-function loadStoredJson(key, fallback) {
-  try {
-    const value = localStorage.getItem(key);
-    return value ? JSON.parse(value) : fallback;
-  } catch (error) {
-    return fallback;
-  }
+function alertExists(newAlert) {
+    return alerts.some((alert) => {
+        return valueOrNA(alert.timestamp) === valueOrNA(newAlert.timestamp)
+            && valueOrNA(alert.stakeholder) === valueOrNA(newAlert.stakeholder)
+            && valueOrNA(alert.sender) === valueOrNA(newAlert.sender)
+            && valueOrNA(alert.score) === valueOrNA(newAlert.score)
+            && valueOrNA(alert.original_message) === valueOrNA(newAlert.original_message);
+    });
 }
 
-function emptyState(text) {
-  const element = document.createElement("p");
-  element.className = "empty-state";
-  element.textContent = text;
-  return element;
+function setConnection(isOnline) {
+    elements.connectionStatus.classList.toggle("online", isOnline);
+    elements.connectionStatus.classList.toggle("offline", !isOnline);
+    elements.connectionStatus.textContent = isOnline ? "Backend connected" : "Backend not connected";
+}
+
+function setSendLoading(isLoading) {
+    const button = elements.messageForm.querySelector("button");
+    button.disabled = isLoading;
+    button.textContent = isLoading ? "Sending..." : "Send";
+}
+
+function showNotice(message, isError) {
+    elements.noticeArea.innerHTML = "";
+    const notice = document.createElement("div");
+    notice.className = `notice ${isError ? "error" : ""}`;
+    notice.textContent = message;
+    elements.noticeArea.appendChild(notice);
+}
+
+function clearNotice() {
+    elements.noticeArea.innerHTML = "";
+}
+
+function formatList(value) {
+    if (!Array.isArray(value) || value.length === 0) {
+        return "N/A";
+    }
+    return value.join(", ");
+}
+
+function formatBoolean(value) {
+    if (typeof value !== "boolean") {
+        return "N/A";
+    }
+    return value ? "Yes" : "No";
+}
+
+function valueOrNA(value) {
+    if (value === null || value === undefined || value === "") {
+        return "N/A";
+    }
+    return String(value);
+}
+
+function formatTime(timestamp) {
+    if (!timestamp) {
+        return "N/A";
+    }
+
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) {
+        return timestamp;
+    }
+
+    return date.toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+    });
+}
+
+function safeText(value) {
+    return value || "N/A";
 }
