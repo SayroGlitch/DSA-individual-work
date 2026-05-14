@@ -86,6 +86,38 @@
                 <div class="empty-state">No alerts loaded yet.</div>
             </div>
         </section>
+
+        <section class="word-register-section">
+            <div class="section-title-row">
+                <div>
+                    <h2>Word Register</h2>
+                    <p>Add a new phrase to words.json for the backend scorer.</p>
+                </div>
+                <button id="loadWordsBtn" class="secondary-btn" type="button">Load Count</button>
+            </div>
+
+            <form id="wordForm" class="word-form">
+                <label>
+                    Phrase
+                    <input id="wordPhraseInput" type="text" placeholder="example phrase">
+                </label>
+                <label>
+                    Score
+                    <input id="wordScoreInput" type="number" min="0" max="100" placeholder="7">
+                </label>
+                <label>
+                    Category
+                    <select id="wordCategoryInput">
+                        <option value="">Choose category</option>
+                    </select>
+                </label>
+                <button type="submit">Add Word</button>
+            </form>
+
+            <div id="wordRegisterResult" class="info-box word-register-result">
+                Add a phrase, score, and category. New entries are saved to backend/words.json.
+            </div>
+        </section>
     </div>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>

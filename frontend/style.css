@@ -53,7 +53,8 @@ button:disabled {
 .top-bar,
 .chat-section,
 .side-panel,
-.alerts-section {
+.alerts-section,
+.word-register-section {
     background: white;
     border: 1px solid #d8dee8;
     border-radius: 8px;
@@ -324,6 +325,11 @@ textarea {
     padding: 16px;
 }
 
+.word-register-section {
+    margin-top: 16px;
+    padding: 16px;
+}
+
 .section-title-row {
     justify-content: space-between;
     margin-bottom: 14px;
@@ -362,6 +368,25 @@ textarea {
     font-size: 13px;
 }
 
+.word-form {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.5fr) minmax(110px, 0.5fr) minmax(180px, 1fr) auto;
+    gap: 10px;
+    align-items: end;
+}
+
+.word-form label {
+    display: grid;
+    gap: 6px;
+    color: #5b6574;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.word-register-result {
+    margin-top: 12px;
+}
+
 @media (max-width: 850px) {
     .top-bar,
     .chat-header {
@@ -387,7 +412,8 @@ textarea {
     .top-bar,
     .chat-section,
     .side-panel,
-    .alerts-section {
+    .alerts-section,
+    .word-register-section {
         border-radius: 0;
         border-left: 0;
         border-right: 0;
@@ -412,6 +438,10 @@ textarea {
     }
 
     .data-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .word-form {
         grid-template-columns: 1fr;
     }
 }

@@ -1,202 +1,182 @@
-#include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
-#define MAX_TEXT 4096
-#define MAX_MATCHES 256
-#define MAX_NODES 12000
-#define ALPHABET_SIZE 38
+// ─── Phrase list ──────────────────────────────────────────────
 
-typedef struct {
-    int next[ALPHABET_SIZE];
-    int fail;
-    int output_index;
-} TrieNode;
+#define MAX_PHRASES 4096
 
 typedef struct {
-    char phrase[128];
-    int score;
+    char phrase[256];
+    int  score;
     char category[64];
-} LexiconEntry;
+} Phrase;
 
-typedef struct {
-    char matched_phrases[MAX_MATCHES][128];
-    char matched_categories[MAX_MATCHES][64];
-    int matched_scores[MAX_MATCHES];
-    int match_count;
-    int total_score;
-} ScanResult;
+static Phrase phrases[MAX_PHRASES];
+static int    phrase_count = 0;
+static int    loaded       = 0;
 
-TrieNode trie[MAX_NODES];
-int trie_size = 0;
-
-int char_to_index(char c) {
-    if (c >= 'a' && c <= 'z') return c - 'a';
-    if (c >= '0' && c <= '9') return 26 + (c - '0');
-    if (c == '\'') return 36;
-    if (c == ' ') return 37;
-    return -1;
+static void clear_phrases() {
+    phrase_count = 0;
+    memset(phrases, 0, sizeof(phrases));
 }
 
-void init_trie() {
-    trie_size = 1;
-    for (int i = 0; i < MAX_NODES; i++) {
-        for (int j = 0; j < ALPHABET_SIZE; j++) {
-            trie[i].next[j] = -1;
+// ─── JSON parser ─────────────────────────────────────────────
+// Format: "phrase": {"score": N, "category": "..."}
+
+static void parse_words_json(const char *json) {
+    const char *p = json;
+
+    while (*p) {
+        // find opening quote of a key
+        while (*p && *p != '"') p++;
+        if (!*p) break;
+        p++; // skip "
+
+        // read key (phrase)
+        char key[256];
+        int  ki = 0;
+        while (*p && *p != '"' && ki < 255)
+            key[ki++] = *p++;
+        key[ki] = '\0';
+        if (*p == '"') p++;
+
+        // skip : and {
+        while (*p && *p != '{') p++;
+        if (!*p) break;
+        p++;
+
+        // read score
+        const char *sc = strstr(p, "\"score\"");
+        const char *ca = strstr(p, "\"category\"");
+        const char *cl = strchr(p, '}');
+
+        if (!sc || !cl || sc > cl) { p = cl ? cl + 1 : p + 1; continue; }
+
+        // parse score value
+        const char *sv = sc + 7;
+        while (*sv && (*sv < '0' || *sv > '9')) sv++;
+        int score = atoi(sv);
+
+        // parse category value
+        char category[64] = "";
+        if (ca && ca < cl) {
+            const char *cv = ca + 10;
+            while (*cv && *cv != '"') cv++;
+            if (*cv == '"') cv++;
+            int ci = 0;
+            while (*cv && *cv != '"' && ci < 63)
+                category[ci++] = *cv++;
+            category[ci] = '\0';
         }
-        trie[i].fail = 0;
-        trie[i].output_index = -1;
+
+        if (phrase_count < MAX_PHRASES && ki > 0) {
+            // lowercase the phrase
+            for (int i = 0; key[i]; i++)
+                key[i] = tolower((unsigned char)key[i]);
+            strncpy(phrases[phrase_count].phrase,   key,      255);
+            strncpy(phrases[phrase_count].category, category,  63);
+            phrases[phrase_count].score = score;
+            phrase_count++;
+        }
+
+        p = cl + 1;
     }
 }
 
-void normalize_text_c(const char *input, char *output, int max_len) {
-    int j = 0;
-    int prev_space = 1;
+static void load_words_json() {
+    clear_phrases();
 
-    for (int i = 0; input[i] != '\0' && j < max_len - 1; i++) {
-        unsigned char c = (unsigned char)input[i];
+    const char *paths[] = {
+        "words.json",
+        "/app/words.json",
+        "../words.json"
+    };
 
-        if (isalnum(c) || c == '\'') {
-            output[j++] = (char)tolower(c);
-            prev_space = 0;
-        } else {
-            if (!prev_space) {
-                output[j++] = ' ';
-                prev_space = 1;
+    FILE *f = NULL;
+    for (int i = 0; i < 3; i++) {
+        f = fopen(paths[i], "r");
+        if (f) break;
+    }
+
+    if (!f) {
+        fprintf(stderr, "[scorer] WARNING: words.json not found\n");
+        return;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    rewind(f);
+
+    char *buf = (char *)malloc(len + 1);
+    if (!buf) { fclose(f); return; }
+    fread(buf, 1, len, f);
+    buf[len] = '\0';
+    fclose(f);
+
+    // lowercase entire buffer for matching
+    for (long i = 0; i < len; i++)
+        buf[i] = tolower((unsigned char)buf[i]);
+
+    parse_words_json(buf);
+    free(buf);
+}
+
+// ─── Scorer ───────────────────────────────────────────────────
+
+void reload_words() {
+    load_words_json();
+    loaded = 1;
+}
+
+int score_text(const char *text) {
+    if (!loaded) {
+        load_words_json();
+        loaded = 1;
+    }
+    if (!text || !*text) return 0;
+
+    // lowercase copy of input
+    char buf[4096];
+    strncpy(buf, text, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    for (int i = 0; buf[i]; i++)
+        buf[i] = tolower((unsigned char)buf[i]);
+
+    int total = 0;
+
+    // sort phrases by length descending so longer phrases match first
+    // (simple insertion sort since phrase_count is small)
+    for (int i = 1; i < phrase_count; i++) {
+        Phrase tmp = phrases[i];
+        int j = i - 1;
+        while (j >= 0 && strlen(phrases[j].phrase) < strlen(tmp.phrase)) {
+            phrases[j + 1] = phrases[j];
+            j--;
+        }
+        phrases[j + 1] = tmp;
+    }
+
+    for (int i = 0; i < phrase_count; i++) {
+        const char *ph  = phrases[i].phrase;
+        size_t      plen = strlen(ph);
+        const char *pos = buf;
+
+        while ((pos = strstr(pos, ph)) != NULL) {
+            // check word boundaries
+            int start = (int)(pos - buf);
+            int end   = start + (int)plen;
+
+            int left_ok  = (start == 0 || !isalnum((unsigned char)buf[start - 1]));
+            int right_ok = (buf[end] == '\0' || !isalnum((unsigned char)buf[end]));
+
+            if (left_ok && right_ok) {
+                total += phrases[i].score;
             }
+            pos++;
         }
     }
 
-    if (j > 0 && output[j - 1] == ' ') {
-        j--;
-    }
-
-    output[j] = '\0';
-}
-
-void insert_pattern(const char *pattern, int pattern_index) {
-    int node = 0;
-
-    for (int i = 0; pattern[i] != '\0'; i++) {
-        int idx = char_to_index(pattern[i]);
-        if (idx == -1) continue;
-
-        if (trie[node].next[idx] == -1) {
-            trie[node].next[idx] = trie_size++;
-        }
-        node = trie[node].next[idx];
-    }
-
-    trie[node].output_index = pattern_index;
-}
-
-void build_failure_links() {
-    int queue[MAX_NODES];
-    int front = 0, rear = 0;
-
-    for (int c = 0; c < ALPHABET_SIZE; c++) {
-        int next_node = trie[0].next[c];
-        if (next_node != -1) {
-            trie[next_node].fail = 0;
-            queue[rear++] = next_node;
-        } else {
-            trie[0].next[c] = 0;
-        }
-    }
-
-    while (front < rear) {
-        int current = queue[front++];
-
-        for (int c = 0; c < ALPHABET_SIZE; c++) {
-            int next_node = trie[current].next[c];
-
-            if (next_node != -1) {
-                trie[next_node].fail = trie[trie[current].fail].next[c];
-                queue[rear++] = next_node;
-            } else {
-                trie[current].next[c] = trie[trie[current].fail].next[c];
-            }
-        }
-    }
-}
-
-int is_word_boundary(char c) {
-    return c == '\0' || c == ' ';
-}
-
-void scan_text_c(
-    const char *message,
-    LexiconEntry entries[],
-    int entry_count,
-    ScanResult *result
-) {
-    char normalized[MAX_TEXT];
-    normalize_text_c(message, normalized, sizeof(normalized));
-
-    result->match_count = 0;
-    result->total_score = 0;
-
-    init_trie();
-
-    for (int i = 0; i < entry_count; i++) {
-        insert_pattern(entries[i].phrase, i);
-    }
-
-    build_failure_links();
-
-    int state = 0;
-    int text_len = (int)strlen(normalized);
-
-    for (int i = 0; i < text_len; i++) {
-        int idx = char_to_index(normalized[i]);
-        if (idx == -1) {
-            state = 0;
-            continue;
-        }
-
-        state = trie[state].next[idx];
-
-        int temp = state;
-        while (temp != 0) {
-            int out = trie[temp].output_index;
-
-            if (out != -1) {
-                int phrase_len = (int)strlen(entries[out].phrase);
-                int start = i - phrase_len + 1;
-
-                char before = (start <= 0) ? ' ' : normalized[start - 1];
-                char after = (i + 1 >= text_len) ? '\0' : normalized[i + 1];
-
-                if (is_word_boundary(before) && is_word_boundary(after)) {
-                    int already_added = 0;
-                    for (int k = 0; k < result->match_count; k++) {
-                        if (strcmp(result->matched_phrases[k], entries[out].phrase) == 0) {
-                            already_added = 1;
-                            break;
-                        }
-                    }
-
-                    if (!already_added && result->match_count < MAX_MATCHES) {
-                        strncpy(result->matched_phrases[result->match_count], entries[out].phrase, 127);
-                        result->matched_phrases[result->match_count][127] = '\0';
-
-                        strncpy(result->matched_categories[result->match_count], entries[out].category, 63);
-                        result->matched_categories[result->match_count][63] = '\0';
-
-                        result->matched_scores[result->match_count] = entries[out].score;
-                        result->total_score += entries[out].score;
-                        result->match_count++;
-                    }
-                }
-            }
-
-            temp = trie[temp].fail;
-        }
-    }
-}
-
-int classify_score_c(int score) {
-    if (score >= 18) return 2;
-    if (score >= 7) return 1;
-    return 0;
+    return total;
 }

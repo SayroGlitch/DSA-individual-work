@@ -1,8 +1,25 @@
 const API_BASE = "http://localhost:5069";
 const PLATFORM = "p2p_chat";
 const STUDENTS = ["StudentA", "StudentB"];
+const CURRENT_USER_KEY = "safeguardCurrentUser";
+const WORD_CATEGORIES = [
+    "insult",
+    "mockery",
+    "humiliation",
+    "exclusion",
+    "harassment",
+    "threat",
+    "self-harm encouragement",
+    "identity-targeted",
+    "sexual-harassment",
+    "appearance-shaming",
+    "body-shaming",
+    "gaslighting",
+    "profanity-targeted",
+    "intimidation"
+];
 
-let currentUser = STUDENTS[0];
+let currentUser = loadSavedPerspective();
 let messages = [];
 let alerts = [];
 let latestAnalyses = {};
@@ -24,7 +41,13 @@ const elements = {
     minScoreInput: document.getElementById("minScoreInput"),
     searchAlertsBtn: document.getElementById("searchAlertsBtn"),
     refreshAlertsBtn: document.getElementById("refreshAlertsBtn"),
-    alertsList: document.getElementById("alertsList")
+    alertsList: document.getElementById("alertsList"),
+    wordForm: document.getElementById("wordForm"),
+    wordPhraseInput: document.getElementById("wordPhraseInput"),
+    wordScoreInput: document.getElementById("wordScoreInput"),
+    wordCategoryInput: document.getElementById("wordCategoryInput"),
+    loadWordsBtn: document.getElementById("loadWordsBtn"),
+    wordRegisterResult: document.getElementById("wordRegisterResult")
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -32,18 +55,21 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvents();
     loadMessages();
     loadAlerts();
+    renderCategoryOptions();
     setupSocket();
 });
 
 function bindEvents() {
     elements.switchUserBtn.addEventListener("click", switchPerspective);
-    elements.refreshMessagesBtn.addEventListener("click", loadMessages);
+    elements.refreshMessagesBtn.addEventListener("click", resetSimulation);
     elements.messageForm.addEventListener("submit", sendMessage);
     elements.loadStudentABtn.addEventListener("click", () => loadSession(STUDENTS[0]));
     elements.loadStudentBBtn.addEventListener("click", () => loadSession(STUDENTS[1]));
     elements.refreshAlertsBtn.addEventListener("click", loadAlerts);
     elements.searchAlertsBtn.addEventListener("click", searchAlerts);
     elements.stakeholderFilter.addEventListener("change", loadAlerts);
+    elements.wordForm.addEventListener("submit", addWordRegister);
+    elements.loadWordsBtn.addEventListener("click", loadWordCount);
 }
 
 async function apiRequest(path, options = {}) {
@@ -79,6 +105,38 @@ async function loadMessages() {
     }
 }
 
+async function resetSimulation() {
+    elements.refreshMessagesBtn.disabled = true;
+    elements.refreshMessagesBtn.textContent = "Restarting...";
+
+    try {
+        await apiRequest("/reset", {
+            method: "POST",
+            body: JSON.stringify({})
+        });
+
+        messages = [];
+        alerts = [];
+        latestAnalyses = {};
+        elements.messageInput.value = "";
+        elements.minScoreInput.value = "";
+        elements.stakeholderFilter.value = "";
+        elements.latestResult.textContent = "Send a message to see the analysis.";
+        elements.sessionResult.textContent = "Choose a student to load session data.";
+
+        renderMessages();
+        renderAlerts();
+        setConnection(true);
+        showNotice("Chat restarted. Messages, alerts, sessions, and queue were cleared.", false);
+    } catch (error) {
+        setConnection(false);
+        showNotice("Could not restart the chat. Make sure the backend is running.", true);
+    } finally {
+        elements.refreshMessagesBtn.disabled = false;
+        elements.refreshMessagesBtn.textContent = "Refresh Chat";
+    }
+}
+
 async function sendMessage(event) {
     event.preventDefault();
 
@@ -88,13 +146,14 @@ async function sendMessage(event) {
         return;
     }
 
+    const sender = currentUser;
     setSendLoading(true);
 
     try {
         const result = await apiRequest("/messages", {
             method: "POST",
             body: JSON.stringify({
-                sender: currentUser,
+                sender,
                 platform: PLATFORM,
                 text
             })
@@ -102,7 +161,7 @@ async function sendMessage(event) {
 
         const message = result.message || {
             id: Date.now(),
-            sender: currentUser,
+            sender,
             platform: PLATFORM,
             text,
             timestamp: new Date().toISOString()
@@ -192,6 +251,7 @@ function createAnalysisLine(analysis) {
 
 function switchPerspective() {
     currentUser = currentUser === STUDENTS[0] ? STUDENTS[1] : STUDENTS[0];
+    savePerspective();
     updatePerspectiveDisplay();
     renderMessages();
 }
@@ -203,9 +263,19 @@ function updatePerspectiveDisplay() {
     elements.messageInput.placeholder = `Message as ${currentUser}...`;
 }
 
+function loadSavedPerspective() {
+    const savedUser = localStorage.getItem(CURRENT_USER_KEY);
+    return STUDENTS.includes(savedUser) ? savedUser : STUDENTS[0];
+}
+
+function savePerspective() {
+    localStorage.setItem(CURRENT_USER_KEY, currentUser);
+}
+
 function renderLatestResult(result) {
     const analysis = result.analysis || {};
     const session = result.session_pattern || {};
+    const totalMessages = session.total_messages ?? session.total;
 
     elements.latestResult.innerHTML = "";
     elements.latestResult.appendChild(createDataGrid([
@@ -215,7 +285,7 @@ function renderLatestResult(result) {
         ["Categories", formatList(analysis.categories)],
         ["Matched words", formatList(analysis.matched_words)],
         ["Pattern level", valueOrNA(session.pattern_level)],
-        ["Total messages", valueOrNA(session.total_messages)],
+        ["Total messages", valueOrNA(totalMessages)],
         ["High count", valueOrNA(session.high_count)],
         ["Escalating", formatBoolean(session.escalating)]
     ]));
@@ -277,7 +347,7 @@ function renderAlerts() {
         return;
     }
 
-    alerts.forEach((alert) => {
+    groupAlerts(alerts).forEach((alert) => {
         const card = document.createElement("div");
         card.className = "alert-card";
 
@@ -286,12 +356,13 @@ function renderAlerts() {
 
         const title = document.createElement("div");
         title.className = "alert-title";
-        title.textContent = `${valueOrNA(alert.stakeholder)} alert for ${valueOrNA(alert.sender)}`;
+        title.textContent = `alert for ${valueOrNA(alert.sender)} (${formatList(alert.stakeholders)})`;
 
         top.appendChild(title);
         top.appendChild(createBadge(alert.effective_level || alert.level || "N/A"));
 
         const grid = createDataGrid([
+            ["Stakeholders", formatList(alert.stakeholders)],
             ["Action", valueOrNA(alert.action)],
             ["Score", valueOrNA(alert.score)],
             ["Matched words", formatList(alert.matched_words)],
@@ -304,14 +375,43 @@ function renderAlerts() {
     });
 }
 
+function groupAlerts(alertList) {
+    const grouped = new Map();
+
+    alertList.forEach((alert) => {
+        const key = [
+            valueOrNA(alert.original_message),
+            valueOrNA(alert.sender),
+            valueOrNA(alert.score),
+            valueOrNA(alert.action),
+            valueOrNA(alert.effective_level || alert.level)
+        ].join("|");
+
+        if (!grouped.has(key)) {
+            grouped.set(key, {
+                ...alert,
+                stakeholders: []
+            });
+        }
+
+        const group = grouped.get(key);
+        if (alert.stakeholder && !group.stakeholders.includes(alert.stakeholder)) {
+            group.stakeholders.push(alert.stakeholder);
+        }
+    });
+
+    return Array.from(grouped.values());
+}
+
 async function loadSession(student) {
     try {
         const data = await apiRequest(`/session?sender=${encodeURIComponent(student)}&platform=${encodeURIComponent(PLATFORM)}`);
+        const totalMessages = data.total_messages ?? data.total;
         elements.sessionResult.innerHTML = "";
         elements.sessionResult.appendChild(createDataGrid([
             ["Student", student],
             ["Pattern level", valueOrNA(data.pattern_level)],
-            ["Total messages", valueOrNA(data.total_messages)],
+            ["Total messages", valueOrNA(totalMessages)],
             ["High count", valueOrNA(data.high_count)],
             ["Escalating", formatBoolean(data.escalating)]
         ]));
@@ -320,6 +420,69 @@ async function loadSession(student) {
     } catch (error) {
         setConnection(false);
         showNotice(`Could not load session for ${student}.`, true);
+    }
+}
+
+async function loadWordCount() {
+    try {
+        const data = await apiRequest("/words");
+        elements.wordRegisterResult.textContent = `words.json currently has ${valueOrNA(data.count)} entries.`;
+        setConnection(true);
+        clearNotice();
+    } catch (error) {
+        setConnection(false);
+        elements.wordRegisterResult.textContent = "Could not load words.json count from the backend.";
+    }
+}
+
+function renderCategoryOptions() {
+    const currentValue = elements.wordCategoryInput.value;
+    const categories = [...WORD_CATEGORIES].sort((a, b) => a.localeCompare(b));
+
+    elements.wordCategoryInput.innerHTML = '<option value="">Choose category</option>';
+
+    categories.forEach((category) => {
+        const option = document.createElement("option");
+        option.value = category;
+        option.textContent = category;
+        elements.wordCategoryInput.appendChild(option);
+    });
+
+    if (categories.includes(currentValue)) {
+        elements.wordCategoryInput.value = currentValue;
+    }
+}
+
+async function addWordRegister(event) {
+    event.preventDefault();
+
+    const phrase = elements.wordPhraseInput.value.trim();
+    const score = elements.wordScoreInput.value.trim();
+    const category = elements.wordCategoryInput.value.trim();
+
+    if (!phrase || !score || !category) {
+        elements.wordRegisterResult.textContent = "Please fill in phrase, score, and category.";
+        return;
+    }
+
+    try {
+        const data = await apiRequest("/words", {
+            method: "POST",
+            body: JSON.stringify({
+                phrase,
+                score: Number(score),
+                category
+            })
+        });
+
+        elements.wordForm.reset();
+        elements.wordRegisterResult.textContent =
+            `Saved "${data.entry.phrase}" with score ${data.entry.score} in ${data.entry.category}. Total entries: ${data.count}.`;
+        setConnection(true);
+        clearNotice();
+    } catch (error) {
+        setConnection(false);
+        elements.wordRegisterResult.textContent = error.message || "Could not save the new word register.";
     }
 }
 
